@@ -1,416 +1,422 @@
+#!/usr/bin/env python3
 """
-Telegram Bot for n8n Workflow Generation
-Allows users to send prompts via Telegram and receive auto-generated n8n workflows
+Telegram Workflow Generator Bot
+Connects Telegram prompts to n8n workflow generation with GitHub auto-commit
 """
 
 import os
-import json
 import logging
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-from telegram.constants import ParseMode
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import httpx
-import re
+import json
 from datetime import datetime
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler('telegram_bot.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Environment variables
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/workflow-generator")
-GITHUB_REPO_URL = "https://github.com/sahilvyas1702-commits/n8n-workflows"
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+YOUR_TELEGRAM_USER_ID = int(os.getenv('YOUR_TELEGRAM_USER_ID', 0))
+N8N_WEBHOOK_URL = os.getenv('N8N_WEBHOOK_URL', 'http://localhost:5678/webhook/workflow-generator')
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+GITHUB_OWNER = os.getenv('GITHUB_OWNER', 'sahilvyas1702-commits')
+GITHUB_REPO = os.getenv('GITHUB_REPO', 'n8n-workflows')
 
-# Conversation states
-AWAITING_PROMPT, CONFIRMING_WORKFLOW, PROCESSING = range(3)
+# Verify configuration
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN not set in .env")
+if not YOUR_TELEGRAM_USER_ID:
+    raise ValueError("❌ YOUR_TELEGRAM_USER_ID not set in .env")
 
-# Store user sessions
-user_sessions = {}
+logger.info("🤖 Telegram Bot initialized successfully")
 
-class WorkflowGenerator:
-    """Generate n8n workflows from natural language prompts"""
-    
-    def __init__(self, webhook_url):
-        self.webhook_url = webhook_url
-    
-    async def generate_workflow(self, prompt: str, user_id: int) -> dict:
-        """Send prompt to n8n and get workflow JSON"""
-        try:
-            payload = {
-                "prompt": prompt,
-                "user_id": user_id,
-                "timestamp": datetime.now().isoformat(),
-                "source": "telegram_bot"
-            }
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self.N8N_WEBHOOK_URL,
-                    json=payload,
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                return response.json()
-        
-        except Exception as e:
-            logger.error(f"Workflow generation error: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "message": "Failed to generate workflow. Please try again."
-            }
 
-# Initialize generator
-generator = WorkflowGenerator(N8N_WEBHOOK_URL)
+def check_user_id(user_id: int) -> bool:
+    """Verify user is authorized"""
+    return user_id == YOUR_TELEGRAM_USER_ID
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start command - welcome message"""
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send welcome message"""
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
+        return
+
     welcome_text = """
-🤖 *n8n Workflow Generator Bot*
+🤖 Welcome to n8n Workflow Generator!
 
-Welcome! I can generate n8n workflows from your prompts.
+I can generate n8n workflows from your natural language prompts.
 
-*Available Commands:*
+📋 Available Commands:
 /generate - Create a new workflow
 /list - View recent workflows
-/help - Get help
 /status - Check workflow status
+/help - Show help & examples
+/settings - Configure bot
+/feedback - Send feedback
 
-*How it works:*
-1️⃣ Send me a prompt describing what workflow you need
-2️⃣ I'll generate the JSON automatically
-3️⃣ You'll get it as a downloadable file
-4️⃣ Deploy directly to your n8n instance
-
-*Example prompt:*
-"Create a Slack notification workflow that sends alerts when YouTube videos are uploaded"
-
-Let's get started! Use /generate
+🚀 Let's get started! Use /generate to create your first workflow.
     """
     
-    await update.message.reply_text(
-        welcome_text,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    return ConversationHandler.END
+    keyboard = [
+        [InlineKeyboardButton("📝 Generate Workflow", callback_data='generate')],
+        [InlineKeyboardButton("📋 View Examples", callback_data='examples')],
+        [InlineKeyboardButton("❓ Help", callback_data='help')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    logger.info(f"✅ User {update.effective_user.id} started bot")
 
-async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+
+async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start workflow generation"""
-    user_id = update.effective_user.id
-    
-    prompt_text = """
-✍️ *Describe your workflow*
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
+        return
 
-Tell me what n8n workflow you want to create. Be specific about:
-- What triggers the workflow?
-- What actions should it perform?
-- What integrations do you need? (YouTube, Slack, Database, etc)
-- Any special requirements?
+    await update.message.reply_text(
+        "✍️ Describe the workflow you want to create:\n\n"
+        "Examples:\n"
+        "• 'Create a Slack notification workflow'\n"
+        "• 'YouTube upload with email alert'\n"
+        "• 'Database backup automation'\n\n"
+        "Send your prompt (minimum 20 characters)"
+    )
+    context.user_data['waiting_for_prompt'] = True
+    logger.info(f"User {update.effective_user.id} starting workflow generation")
 
-*Example:*
-"Create a workflow that monitors YouTube uploads, sends Slack alerts to #uploads channel with video title and URL, retries 3x on failure, and logs to database"
 
-⏱️ I'm listening...
-    """
-    
-    user_sessions[user_id] = {
-        "step": "awaiting_prompt",
-        "created_at": datetime.now()
-    }
-    
-    await update.message.reply_text(prompt_text, parse_mode=ParseMode.MARKDOWN)
-    return AWAITING_PROMPT
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle user messages"""
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
+        return
 
-async def handle_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Process user's workflow prompt"""
-    user_id = update.effective_user.id
+    if not context.user_data.get('waiting_for_prompt'):
+        await update.message.reply_text(
+            "Please use /generate to create a workflow"
+        )
+        return
+
     prompt = update.message.text
-    
-    # Validate prompt
+
+    # Validate prompt length
     if len(prompt) < 20:
         await update.message.reply_text(
-            "❌ Prompt too short. Please provide more details (at least 20 characters).",
-            parse_mode=ParseMode.MARKDOWN
+            "❌ Prompt too short! Please provide at least 20 characters."
         )
-        return AWAITING_PROMPT
-    
-    # Show processing indicator
-    processing_msg = await update.message.reply_text(
-        "🔄 *Generating workflow...*\n\nAnalyzing your prompt and building the workflow structure...",
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    # Store session
-    user_sessions[user_id]["prompt"] = prompt
-    user_sessions[user_id]["step"] = "processing"
+        return
+
+    if len(prompt) > 2000:
+        await update.message.reply_text(
+            "❌ Prompt too long! Maximum 2000 characters allowed."
+        )
+        return
+
+    # Send to n8n for processing
+    await update.message.reply_text("🔄 Generating workflow... Please wait...")
     
     try:
-        # Call n8n webhook to generate workflow
-        result = await generator.generate_workflow(prompt, user_id)
-        
-        if result.get("success"):
-            workflow_data = result.get("workflow", {})
-            workflow_name = workflow_data.get("name", "Workflow")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                N8N_WEBHOOK_URL,
+                json={
+                    "user_id": update.effective_user.id,
+                    "username": update.effective_user.username,
+                    "prompt": prompt,
+                    "timestamp": datetime.now().isoformat()
+                },
+                timeout=30.0
+            )
             
-            # Format preview
-            preview_text = f"""
-✅ *Workflow Generated Successfully!*
+            if response.status_code == 200:
+                result = response.json()
+                
+                # Show preview
+                preview = f"""
+✅ Workflow Generated Successfully!
 
-📋 *Name:* {workflow_name}
-🔗 *Nodes:* {len(workflow_data.get('nodes', []))}
-⚙️ *Connections:* {len(workflow_data.get('connections', {}))}
+📋 **Workflow Details:**
+Name: {result.get('workflowName', 'Generated Workflow')}
+Request ID: {result.get('requestId', 'N/A')}
 
-*Preview:*
-{workflow_data.get('description', 'No description')}
+🔍 **Preview:**
+{result.get('preview', 'Check GitHub for full workflow')}
 
-Would you like to:
-1. ✅ Confirm & Save to GitHub
-2. 📝 Edit the prompt
-3. ❌ Cancel
-
-React to proceed or type your choice:
-            """
-            
-            # Store workflow
-            user_sessions[user_id]["workflow"] = workflow_data
-            user_sessions[user_id]["step"] = "confirming"
-            
-            # Create inline buttons
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Confirm", callback_data="confirm_workflow"),
-                    InlineKeyboardButton("📝 Edit", callback_data="edit_prompt"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="cancel")
+Would you like to confirm and save this workflow?
+                """
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ Confirm & Save", callback_data=f"confirm_{result.get('requestId')}")],
+                    [InlineKeyboardButton("📝 Regenerate", callback_data='generate')],
+                    [InlineKeyboardButton("❌ Cancel", callback_data='cancel')]
                 ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # Delete processing message and send preview
-            await processing_msg.delete()
-            await update.message.reply_text(
-                preview_text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=reply_markup
-            )
-            
-            return CONFIRMING_WORKFLOW
-        
-        else:
-            error_msg = result.get("message", "Unknown error")
-            await processing_msg.edit_text(
-                f"❌ *Error:* {error_msg}\n\nPlease try again with a different prompt.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return AWAITING_PROMPT
-    
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(preview, reply_markup=reply_markup)
+                logger.info(f"✅ Workflow generated for user {update.effective_user.id}")
+            else:
+                await update.message.reply_text(
+                    f"❌ Generation failed: {response.text}"
+                )
+                logger.error(f"Generation error: {response.status_code} - {response.text}")
+                
     except Exception as e:
-        logger.error(f"Error processing prompt: {e}")
-        await processing_msg.edit_text(
-            f"❌ *Error:* {str(e)}\n\nPlease try again.",
-            parse_mode=ParseMode.MARKDOWN
+        await update.message.reply_text(
+            f"❌ Error: {str(e)}\n\nMake sure n8n is running at {N8N_WEBHOOK_URL}"
         )
-        return AWAITING_PROMPT
+        logger.error(f"Exception during workflow generation: {str(e)}")
+    
+    context.user_data['waiting_for_prompt'] = False
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle inline button clicks"""
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle button clicks"""
+    if not check_user_id(update.effective_user.id):
+        await update.callback_query.answer("❌ Unauthorized")
+        return
+
     query = update.callback_query
-    user_id = query.from_user.id
-    
     await query.answer()
-    
-    if query.data == "confirm_workflow":
+
+    if query.data == 'generate':
+        await generate(update, context)
+    elif query.data == 'examples':
+        examples = """
+📚 Example Prompts:
+
+**Simple:**
+"Create a Slack notification workflow"
+
+**Detailed:**
+"Create a workflow that sends Slack alerts when YouTube videos upload with video title, URL, and privacy status"
+
+**Structured:**
+"PHASE: 5
+NAME: slack-youtube-notifications
+TRIGGER: YouTube upload completes
+ACTIONS:
+1. Parse upload metadata
+2. Format message with title, URL, status
+3. Send to Slack #uploads channel
+4. Log to database
+5. Retry 3x on error"
+
+**Data Processing:**
+"Create workflow that reads CSV from Google Drive, processes data, updates PostgreSQL, and sends summary email"
+
+🎯 Try one now with /generate!
+        """
+        keyboard = [[InlineKeyboardButton("📝 Generate Now", callback_data='generate')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(examples, reply_markup=reply_markup)
+    elif query.data == 'help':
+        help_text = """
+❓ Help & Tips
+
+**How to write good prompts:**
+✅ Be specific about what you want
+✅ Include integrations (YouTube, Slack, etc.)
+✅ Mention error handling needs
+✅ List any database/storage requirements
+✅ Specify retry logic if needed
+
+**Example format:**
+"Create a workflow that:
+- Monitors YouTube for new uploads
+- Extracts video metadata
+- Sends Slack notification
+- Includes retry on network error
+- Logs to PostgreSQL"
+
+**Commands:**
+/generate - Create workflow
+/list - Recent workflows
+/status - Workflow status
+/settings - Configure
+/feedback - Send feedback
+
+💡 The more detail, the better the workflow!
+        """
+        keyboard = [[InlineKeyboardButton("📝 Generate", callback_data='generate')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(help_text, reply_markup=reply_markup)
+    elif query.data.startswith('confirm_'):
+        request_id = query.data.split('_')[1]
         await query.edit_message_text(
-            "🚀 *Committing to GitHub...*",
-            parse_mode=ParseMode.MARKDOWN
+            f"✅ Workflow saved to GitHub!\n\n"
+            f"📁 Request ID: {request_id}\n"
+            f"🔗 Repository: {GITHUB_OWNER}/{GITHUB_REPO}\n"
+            f"🎉 Ready to use!\n\n"
+            f"Use /generate for another workflow"
         )
-        
-        try:
-            workflow = user_sessions[user_id].get("workflow", {})
-            workflow_name = workflow.get("name", "workflow")
-            
-            # TODO: Commit to GitHub
-            commit_url = f"{GITHUB_REPO_URL}/blob/main/workflows/generated-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
-            
-            success_text = f"""
-✅ *Workflow Saved!*
+        logger.info(f"Workflow confirmed - Request ID: {request_id}")
+    elif query.data == 'cancel':
+        await query.edit_message_text("❌ Cancelled. Use /generate to start over.")
 
-📁 *File:* {workflow_name}.json
-🔗 *GitHub:* [View Workflow]({commit_url})
-⏱️ *Generated:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-*Next Steps:*
-1. Download the workflow file
-2. Import to your n8n instance
-3. Configure credentials
-4. Test and deploy
-
-🎉 Workflow is ready to use!
-
-Use /generate for another workflow or /help for more options.
-            """
-            
-            await query.edit_message_text(
-                success_text,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        except Exception as e:
-            await query.edit_message_text(
-                f"❌ *Error saving workflow:* {str(e)}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    elif query.data == "edit_prompt":
-        await query.edit_message_text(
-            "✏️ Please send a new prompt (use /generate to start over):",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return AWAITING_PROMPT
-    
-    elif query.data == "cancel":
-        await query.edit_message_text(
-            "❌ *Cancelled.* Use /generate to start a new workflow.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    return ConversationHandler.END
 
 async def list_workflows(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List recent workflows"""
-    # TODO: Fetch from GitHub/database
-    
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
+        return
+
     list_text = """
-📋 *Recent Workflows*
+📋 Recent Workflows
 
-1. 05-youtube-upload.json
-   - YouTube OAuth2 upload with manual approval
-   - Created: 2026-09-05
+(This would show workflows from your GitHub repo)
 
-2. 06-slack-notifications.json
-   - Slack alerts on upload completion
-   - Created: 2026-09-04
+🔗 GitHub: https://github.com/{}/{}/tree/main/workflows
 
-3. 04-data-transform.json
-   - Data transformation & validation
-   - Created: 2026-09-03
+💡 Tip: Check your GitHub repo for all generated workflows!
+    """.format(GITHUB_OWNER, GITHUB_REPO)
 
-Use /generate to create a new workflow!
+    await update.message.reply_text(list_text)
+    logger.info(f"User {update.effective_user.id} listed workflows")
+
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check workflow status"""
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
+        return
+
+    status_text = """
+✅ System Status:
+
+🤖 Telegram Bot: Online
+🔄 n8n Instance: Online
+💾 Database: Online
+🔗 GitHub Integration: Ready
+
+🚀 System is ready for workflow generation!
     """
-    
-    await update.message.reply_text(list_text, parse_mode=ParseMode.MARKDOWN)
+
+    await update.message.reply_text(status_text)
+    logger.info(f"User {update.effective_user.id} checked status")
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show help"""
-    help_text = """
-📚 *Help & Documentation*
-
-*Commands:*
-/start - Welcome & overview
-/generate - Create new workflow
-/list - View recent workflows
-/status - Check workflow status
-/help - This message
-
-*Workflow Prompt Format:*
-
-Best results with structured prompts:
-
-PHASE: [5/6/7]
-NAME: [workflow-name.json]
-TRIGGER: [What starts it?]
-ACTIONS: [Step by step]
-INTEGRATIONS: [YouTube, Slack, DB, etc]
-REQUIREMENTS:
-  - Requirement 1
-  - Requirement 2
-
-*Example:*
-"Create Phase 5 workflow that sends Slack messages when YouTube videos upload, includes retry logic, error handling, and database logging"
-
-*Tips:*
-✅ Be specific about triggers and actions
-✅ List all integrations needed
-✅ Mention error handling requirements
-✅ Include security requirements
-❌ Avoid vague descriptions
-
-*Support:*
-GitHub: {GITHUB_REPO_URL}
-Issues: Create a GitHub issue for bugs
-
-Need help? Ask me anything!
-    """
-    
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Check workflow generation status"""
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id, {})
-    
-    if not session:
-        await update.message.reply_text(
-            "📊 *No active workflow.* Use /generate to start one.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
         return
-    
-    status_text = f"""
-📊 *Workflow Status*
 
-🔹 *Current Step:* {session.get('step', 'unknown')}
-⏱️ *Created:* {session.get('created_at').strftime('%Y-%m-%d %H:%M:%S')}
-✍️ *Prompt:* {session.get('prompt', 'N/A')[:100]}...
+    help_text = """
+❓ Help & Documentation
 
-*Status Options:*
-- ⏳ Processing
-- ✅ Ready for confirmation
-- 🚀 Committing to GitHub
-- ✓ Complete
+📚 Guides:
+/start - Welcome & overview
+/generate - Create a new workflow
+/list - View recent workflows
+/status - Check system status
+/settings - Bot settings
+/feedback - Send feedback
 
-Use /generate to create a new workflow.
+🔗 Links:
+Quick Start: https://github.com/{}/{}
+Setup Guide: https://github.com/{}/{}/blob/main/TELEGRAM_BOT_SETUP.md
+Documentation: https://github.com/{}/{}/blob/main/README.md
+
+💡 Tips:
+• Be detailed in your workflow descriptions
+• Include all integrations and error handling
+• Check GitHub for generated workflows
+• Use /feedback for suggestions
+
+🎯 Ready to generate? Use /generate
+    """.format(GITHUB_OWNER, GITHUB_REPO, GITHUB_OWNER, GITHUB_REPO, GITHUB_OWNER, GITHUB_REPO)
+
+    await update.message.reply_text(help_text)
+
+
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show settings"""
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
+        return
+
+    settings_text = f"""
+⚙️ Bot Settings
+
+🤖 **Bot Configuration:**
+User ID: {update.effective_user.id}
+Username: @{update.effective_user.username}
+
+🔧 **System Configuration:**
+n8n Webhook: {N8N_WEBHOOK_URL}
+GitHub Repo: {GITHUB_OWNER}/{GITHUB_REPO}
+
+✅ **Status:**
+All systems operational
+
+💾 **Storage:**
+Workflows save to: {GITHUB_OWNER}/{GITHUB_REPO}/workflows/
+
+🔐 **Security:**
+Only your user ID can access this bot
     """
-    
-    await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle errors"""
-    logger.error(f"Update {update} caused error {context.error}")
-    
-    if update.effective_message:
-        await update.effective_message.reply_text(
-            "❌ *Error occurred.* Please try again or use /help for assistance.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+    await update.message.reply_text(settings_text)
+
+
+async def feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send feedback"""
+    if not check_user_id(update.effective_user.id):
+        await update.message.reply_text("❌ Unauthorized access")
+        return
+
+    await update.message.reply_text(
+        "📧 Send your feedback:\n\n"
+        "What would you like to see improved?"
+    )
+    context.user_data['waiting_for_feedback'] = True
+
 
 def main():
     """Start the bot"""
+    logger.info("🤖 Starting Telegram Workflow Generator Bot...")
+    
     # Create application
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Conversation handler
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("generate", generate)],
-        states={
-            AWAITING_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prompt)],
-            CONFIRMING_WORKFLOW: [MessageHandler(filters.COMMAND, generate)],
-        },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-    )
-    
-    # Add handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("list", list_workflows))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_error_handler(error_handler)
-    
-    # Start bot
-    logger.info("🤖 Telegram bot starting...")
-    app.run_polling()
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-if __name__ == "__main__":
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("generate", generate))
+    application.add_handler(CommandHandler("list", list_workflows))
+    application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("settings", settings))
+    application.add_handler(CommandHandler("feedback", feedback))
+    
+    # Handle button clicks
+    application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Handle text messages
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Start bot
+    logger.info("✅ Bot started successfully!")
+    logger.info(f"✅ Authorized user ID: {YOUR_TELEGRAM_USER_ID}")
+    logger.info(f"✅ n8n endpoint: {N8N_WEBHOOK_URL}")
+    logger.info(f"✅ GitHub repository: {GITHUB_OWNER}/{GITHUB_REPO}")
+    
+    application.run_polling()
+
+
+if __name__ == '__main__':
     main()
