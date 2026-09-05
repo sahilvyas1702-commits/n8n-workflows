@@ -1,0 +1,739 @@
+{
+  "name": "YouTube Upload - Phase 4",
+  "description": "Secure YouTube video upload with OAuth2, manual approval gate, resumable uploads, and comprehensive validation",
+  "version": "1.0.0",
+  "tags": ["youtube", "video", "upload", "oauth2", "approval", "resumable"],
+  "meta": {
+    "instanceId": "phase-4-youtube-upload",
+    "created": "2026-09-05T00:00:00Z",
+    "author": "n8n-automation"
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "UTC",
+    "timeoutSeconds": 3600
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [50, 300],
+      "webhookId": "youtube-upload"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "uploadId",
+              "value": "={{ $randomUUID() }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ now.toISOString() }}"
+            },
+            {
+              "name": "status",
+              "value": "pending_validation"
+            },
+            {
+              "name": "retryCount",
+              "value": 0
+            },
+            {
+              "name": "resumableSessionUri",
+              "value": null
+            },
+            {
+              "name": "validationErrors",
+              "value": "=[]"
+            }
+          ]
+        }
+      },
+      "id": "initialize-context",
+      "name": "Initialize Upload Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "videoTitle",
+              "value": "={{ $node['webhook-trigger'].json.title }}"
+            },
+            {
+              "name": "videoDescription",
+              "value": "={{ $node['webhook-trigger'].json.description }}"
+            },
+            {
+              "name": "videoTags",
+              "value": "={{ $node['webhook-trigger'].json.tags || [] }}"
+            },
+            {
+              "name": "videoCategory",
+              "value": "={{ $node['webhook-trigger'].json.category || '22' }}"
+            },
+            {
+              "name": "privacyStatus",
+              "value": "={{ $node['webhook-trigger'].json.privacyStatus || 'private' }}"
+            },
+            {
+              "name": "videoFile",
+              "value": "={{ $node['webhook-trigger'].json.videoFile }}"
+            },
+            {
+              "name": "notifySubscribers",
+              "value": "={{ $node['webhook-trigger'].json.notifySubscribers || false }}"
+            }
+          ]
+        }
+      },
+      "id": "extract-payload",
+      "name": "Extract Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['extract-payload'].json.videoTitle }}",
+              "condition": "isEmpty"
+            }
+          ]
+        }
+      },
+      "id": "validate-title",
+      "name": "Validate: Title Required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 150]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "validationErrors",
+              "value": "={{ $node['initialize-context'].json.validationErrors.concat(['ERROR: Title is required and must be non-empty']) }}"
+            }
+          ]
+        }
+      },
+      "id": "add-title-error",
+      "name": "Add Title Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [800, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['extract-payload'].json.videoDescription }}",
+              "condition": "isEmpty"
+            }
+          ]
+        }
+      },
+      "id": "validate-description",
+      "name": "Validate: Description Required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "validationErrors",
+              "value": "={{ $node['initialize-context'].json.validationErrors.concat(['ERROR: Description is required']) }}"
+            }
+          ]
+        }
+      },
+      "id": "add-description-error",
+      "name": "Add Description Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [800, 230]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ !$node['extract-payload'].json.videoFile }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "validate-video-file",
+      "name": "Validate: Video File Required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 450]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "validationErrors",
+              "value": "={{ $node['initialize-context'].json.validationErrors.concat(['ERROR: Video file URL/path is required']) }}"
+            }
+          ]
+        }
+      },
+      "id": "add-video-file-error",
+      "name": "Add Video File Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [800, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ !['private', 'unlisted', 'public'].includes($node['extract-payload'].json.privacyStatus) }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "validate-privacy",
+      "name": "Validate: Privacy Status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 600]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "validationErrors",
+              "value": "={{ $node['initialize-context'].json.validationErrors.concat(['ERROR: Privacy status must be private, unlisted, or public']) }}"
+            }
+          ]
+        }
+      },
+      "id": "add-privacy-error",
+      "name": "Add Privacy Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [800, 530]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['initialize-context'].json.validationErrors.length > 0 }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-validation-errors",
+      "name": "Any Validation Errors?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 350]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ { success: false, error: 'Validation failed', errors: $node['initialize-context'].json.validationErrors, uploadId: $node['initialize-context'].json.uploadId } }}"
+      },
+      "id": "respond-validation-failed",
+      "name": "Respond: Validation Failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1150, 200]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "status",
+              "value": "awaiting_approval"
+            },
+            {
+              "name": "approvalRequestTime",
+              "value": "={{ now.toISOString() }}"
+            },
+            {
+              "name": "approvalDeadline",
+              "value": "={{ new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }}"
+            }
+          ]
+        }
+      },
+      "id": "set-approval-pending",
+      "name": "Set Approval Pending",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1150, 450]
+    },
+    {
+      "parameters": {
+        "pauseType": "manual",
+        "note": "{{ 'Awaiting manual approval for YouTube upload: ' + $node['extract-payload'].json.videoTitle }}"
+      },
+      "id": "manual-approval-gate",
+      "name": "⏸️ MANUAL APPROVAL GATE",
+      "type": "n8n-nodes-base.pause",
+      "typeVersion": 1,
+      "position": [1350, 450]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "status",
+              "value": "approved"
+            },
+            {
+              "name": "approvalTime",
+              "value": "={{ now.toISOString() }}"
+            }
+          ]
+        }
+      },
+      "id": "mark-approved",
+      "name": "Mark Approved",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1550, 450]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youtubeOAuth2Api",
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $node['extract-payload'].json.videoTitle }}",
+        "description": "={{ $node['extract-payload'].json.videoDescription }}",
+        "tags": "={{ $node['extract-payload'].json.videoTags.join(',') }}",
+        "categoryId": "={{ $node['extract-payload'].json.videoCategory }}",
+        "privacyStatus": "={{ $node['extract-payload'].json.privacyStatus }}",
+        "videoFile": "={{ $node['extract-payload'].json.videoFile }}",
+        "notifySubscribers": "={{ $node['extract-payload'].json.notifySubscribers }}",
+        "madeForKids": false,
+        "autoLanguageDetect": true
+      },
+      "id": "youtube-upload",
+      "name": "🎬 YouTube Upload (Resumable)",
+      "type": "n8n-nodes-base.youtube",
+      "typeVersion": 1,
+      "position": [1750, 450],
+      "retryOptions": {
+        "numbers": 3,
+        "delayMultiplier": 2,
+        "initialDelay": 1000,
+        "maxDelay": 60000
+      },
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['youtube-upload'].json.error && $node['youtube-upload'].json.error.includes('quotaExceeded') }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-quota-exceeded",
+      "name": "Quota Exceeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1900, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ { success: false, error: 'YouTube quota exceeded. Please try again tomorrow.', uploadId: $node['initialize-context'].json.uploadId, status: 'quota_exceeded', retryAfter: '24 hours' } }}"
+      },
+      "id": "respond-quota-exceeded",
+      "name": "Respond: Quota Exceeded",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2050, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['youtube-upload'].json.error }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-upload-error",
+      "name": "Upload Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1900, 450]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ { success: false, error: 'Upload failed', details: $node['youtube-upload'].json.error, uploadId: $node['initialize-context'].json.uploadId, status: 'failed', retryCount: $node['initialize-context'].json.retryCount } }}"
+      },
+      "id": "respond-upload-error",
+      "name": "Respond: Upload Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2050, 450]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "uploadSuccess",
+              "value": "={{ { videoId: $node['youtube-upload'].json.id, title: $node['youtube-upload'].json.snippet.title, description: $node['youtube-upload'].json.snippet.description, privacyStatus: $node['youtube-upload'].json.status.privacyStatus, uploadStatus: $node['youtube-upload'].json.status.uploadStatus, uploadedAt: $node['initialize-context'].json.timestamp, approvedAt: $node['mark-approved'].json.approvalTime, uploadDuration: $node['mark-approved'].json.approvalTime } }}"
+            }
+          ]
+        }
+      },
+      "id": "format-success",
+      "name": "Format Success Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [2050, 650]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ { success: true, message: 'Video uploaded successfully', data: $node['format-success'].json.uploadSuccess } }}"
+      },
+      "id": "respond-upload-success",
+      "name": "Respond: Upload Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2200, 650]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "auditLog",
+              "value": "={{ { uploadId: $node['initialize-context'].json.uploadId, videoId: $node['youtube-upload'].json.id || 'pending', videoTitle: $node['extract-payload'].json.videoTitle, privacyStatus: $node['extract-payload'].json.privacyStatus, status: 'completed', uploadedAt: $node['initialize-context'].json.timestamp, approvedAt: $node['mark-approved'].json.approvalTime, uploadDurationSeconds: Math.floor((new Date($node['mark-approved'].json.approvalTime) - new Date($node['initialize-context'].json.timestamp)) / 1000) } }}"
+            }
+          ]
+        }
+      },
+      "id": "create-audit-log",
+      "name": "📋 Create Audit Log Entry",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [2200, 800]
+    }
+  ],
+  "connections": {
+    "webhook-trigger": {
+      "main": [
+        [
+          {
+            "node": "initialize-context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "initialize-context": {
+      "main": [
+        [
+          {
+            "node": "extract-payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "extract-payload": {
+      "main": [
+        [
+          {
+            "node": "validate-title",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-title": {
+      "main": [
+        [
+          {
+            "node": "validate-description",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "add-title-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "add-title-error": {
+      "main": [
+        [
+          {
+            "node": "validate-description",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-description": {
+      "main": [
+        [
+          {
+            "node": "validate-video-file",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "add-description-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "add-description-error": {
+      "main": [
+        [
+          {
+            "node": "validate-video-file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-video-file": {
+      "main": [
+        [
+          {
+            "node": "validate-privacy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "add-video-file-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "add-video-file-error": {
+      "main": [
+        [
+          {
+            "node": "validate-privacy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-privacy": {
+      "main": [
+        [
+          {
+            "node": "check-validation-errors",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "add-privacy-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "add-privacy-error": {
+      "main": [
+        [
+          {
+            "node": "check-validation-errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-validation-errors": {
+      "main": [
+        [
+          {
+            "node": "respond-validation-failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "set-approval-pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "set-approval-pending": {
+      "main": [
+        [
+          {
+            "node": "manual-approval-gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "manual-approval-gate": {
+      "main": [
+        [
+          {
+            "node": "mark-approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mark-approved": {
+      "main": [
+        [
+          {
+            "node": "youtube-upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "youtube-upload": {
+      "main": [
+        [
+          {
+            "node": "check-quota-exceeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-quota-exceeded": {
+      "main": [
+        [
+          {
+            "node": "respond-quota-exceeded",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "check-upload-error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-upload-error": {
+      "main": [
+        [
+          {
+            "node": "respond-upload-error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "format-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "format-success": {
+      "main": [
+        [
+          {
+            "node": "respond-upload-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "respond-upload-success": {
+      "main": [
+        [
+          {
+            "node": "create-audit-log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
