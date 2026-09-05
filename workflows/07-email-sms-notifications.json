@@ -1,0 +1,456 @@
+{
+  "name": "Phase 7: Email & SMS Notifications",
+  "description": "Multi-channel notification system with email and SMS alerts for workflow events",
+  "version": "1.0.0",
+  "tags": ["notifications", "email", "sms", "alerts", "phase-7"],
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook: Notification Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [50, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "notificationId",
+              "value": "={{ $randomUUID() }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ now.toISOString() }}"
+            },
+            {
+              "name": "eventType",
+              "value": "={{ $node['webhook-trigger'].json.event_type }}"
+            },
+            {
+              "name": "recipientEmail",
+              "value": "={{ $node['webhook-trigger'].json.email }}"
+            },
+            {
+              "name": "recipientPhone",
+              "value": "={{ $node['webhook-trigger'].json.phone }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $node['webhook-trigger'].json.message }}"
+            },
+            {
+              "name": "priority",
+              "value": "={{ $node['webhook-trigger'].json.priority || 'normal' }}"
+            },
+            {
+              "name": "channels",
+              "value": "={{ $node['webhook-trigger'].json.channels || ['email'] }}"
+            }
+          ]
+        }
+      },
+      "id": "initialize-notification",
+      "name": "Initialize Notification",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['initialize-notification'].json.recipientEmail.length > 0 }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-email-channel",
+      "name": "Check: Email Channel",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['initialize-notification'].json.recipientPhone.length > 0 }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "check-sms-channel",
+      "name": "Check: SMS Channel",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 450]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.sendgrid.com/v3/mail/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SENDGRID_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "personalizations",
+              "value": "={{ [{ to: [{ email: $node['initialize-notification'].json.recipientEmail }], subject: 'Workflow Notification: ' + $node['initialize-notification'].json.eventType }] }}"
+            },
+            {
+              "name": "from",
+              "value": "{{ { email: $env.SENDGRID_FROM_EMAIL } }}"
+            },
+            {
+              "name": "content",
+              "value": "={{ [{ type: 'text/html', value: '<h2>' + $node['initialize-notification'].json.eventType + '</h2><p>' + $node['initialize-notification'].json.message + '</p><p><strong>Priority:</strong> ' + $node['initialize-notification'].json.priority + '</p><p><small>ID: ' + $node['initialize-notification'].json.notificationId + '</small></p>' }] }}"
+            },
+            {
+              "name": "reply_to",
+              "value": "{{ { email: $env.SENDGRID_REPLY_EMAIL } }}"
+            }
+          ]
+        }
+      },
+      "id": "send-email-sendgrid",
+      "name": "Send Email (SendGrid)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 100],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/{{ $env.TWILIO_ACCOUNT_SID }}/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "From",
+              "value": "{{ $env.TWILIO_PHONE_NUMBER }}"
+            },
+            {
+              "name": "To",
+              "value": "={{ $node['initialize-notification'].json.recipientPhone }}"
+            },
+            {
+              "name": "Body",
+              "value": "={{ '📢 ' + $node['initialize-notification'].json.eventType + ' [' + $node['initialize-notification'].json.priority.toUpperCase() + ']: ' + $node['initialize-notification'].json.message.substring(0, 100) }}"
+            }
+          ]
+        }
+      },
+      "id": "send-sms-twilio",
+      "name": "Send SMS (Twilio)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 450],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "emailStatus",
+              "value": "={{ $node['send-email-sendgrid'].json.errors ? 'failed' : 'sent' }}"
+            },
+            {
+              "name": "emailError",
+              "value": "={{ $node['send-email-sendgrid'].json.errors?.[0]?.message || null }}"
+            }
+          ]
+        }
+      },
+      "id": "process-email-result",
+      "name": "Process Email Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [850, 100]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "smsStatus",
+              "value": "={{ $node['send-sms-twilio'].json.sid ? 'sent' : 'failed' }}"
+            },
+            {
+              "name": "smsError",
+              "value": "={{ $node['send-sms-twilio'].json.message || null }}"
+            }
+          ]
+        }
+      },
+      "id": "process-sms-result",
+      "name": "Process SMS Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [850, 450]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.slack.com/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SLACK_BOT_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "{{ $env.SLACK_NOTIFICATIONS_CHANNEL }}"
+            },
+            {
+              "name": "text",
+              "value": "📬 Notification Sent"
+            },
+            {
+              "name": "blocks",
+              "value": "={{ [{ type: 'section', text: { type: 'mrkdwn', text: '*' + $node['initialize-notification'].json.eventType + '*\\n' + $node['initialize-notification'].json.message } }, { type: 'section', fields: [{ type: 'mrkdwn', text: '*Priority:*\\n' + $node['initialize-notification'].json.priority }, { type: 'mrkdwn', text: '*Status:*\\nEmail: ' + ($node['process-email-result']?.json.emailStatus || 'pending') + '\\nSMS: ' + ($node['process-sms-result']?.json.smsStatus || 'pending') }] }] }}"
+            }
+          ]
+        }
+      },
+      "id": "post-to-slack",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 300],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.DATABASE_URL }}",
+        "authentication": "genericCredentialType",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO notifications (id, event_type, email, phone, message, priority, email_status, sms_status, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+            },
+            {
+              "name": "values",
+              "value": "={{ [$node['initialize-notification'].json.notificationId, $node['initialize-notification'].json.eventType, $node['initialize-notification'].json.recipientEmail, $node['initialize-notification'].json.recipientPhone, $node['initialize-notification'].json.message, $node['initialize-notification'].json.priority, $node['process-email-result']?.json.emailStatus || 'pending', $node['process-sms-result']?.json.smsStatus || 'pending', $node['initialize-notification'].json.timestamp] }}"
+            }
+          ]
+        }
+      },
+      "id": "log-to-database",
+      "name": "Log to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1050, 500],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "notificationResult",
+              "value": "={{ { success: true, id: $node['initialize-notification'].json.notificationId, emailStatus: $node['process-email-result']?.json.emailStatus || 'pending', smsStatus: $node['process-sms-result']?.json.smsStatus || 'pending', timestamp: $node['initialize-notification'].json.timestamp } }}"
+            }
+          ]
+        }
+      },
+      "id": "compile-result",
+      "name": "Compile Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ $node['compile-result'].json.notificationResult }}"
+      },
+      "id": "respond-success",
+      "name": "Respond: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1400, 300]
+    }
+  ],
+  "connections": {
+    "webhook-trigger": {
+      "main": [
+        [
+          {
+            "node": "initialize-notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "initialize-notification": {
+      "main": [
+        [
+          {
+            "node": "check-email-channel",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "check-sms-channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-email-channel": {
+      "main": [
+        [
+          {
+            "node": "send-email-sendgrid",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "post-to-slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-sms-channel": {
+      "main": [
+        [
+          {
+            "node": "send-sms-twilio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "post-to-slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send-email-sendgrid": {
+      "main": [
+        [
+          {
+            "node": "process-email-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send-sms-twilio": {
+      "main": [
+        [
+          {
+            "node": "process-sms-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process-email-result": {
+      "main": [
+        [
+          {
+            "node": "post-to-slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process-sms-result": {
+      "main": [
+        [
+          {
+            "node": "post-to-slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "post-to-slack": {
+      "main": [
+        [
+          {
+            "node": "log-to-database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log-to-database": {
+      "main": [
+        [
+          {
+            "node": "compile-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compile-result": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
