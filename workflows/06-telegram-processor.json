@@ -1,0 +1,317 @@
+{
+  "name": "Telegram Workflow Generator Processor",
+  "description": "Processes workflow generation requests from Telegram bot and creates n8n workflows",
+  "version": "1.0.0",
+  "tags": ["telegram", "workflow-generator", "automation"],
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-receive",
+      "name": "Webhook: Receive Prompt",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [50, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "requestId",
+              "value": "={{ $randomUUID() }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ now.toISOString() }}"
+            },
+            {
+              "name": "telegramUserId",
+              "value": "={{ $node['webhook-receive'].json.user_id }}"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $node['webhook-receive'].json.prompt }}"
+            },
+            {
+              "name": "source",
+              "value": "telegram_bot"
+            }
+          ]
+        }
+      },
+      "id": "initialize-request",
+      "name": "Initialize Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "value1": "={{ $node['initialize-request'].json.prompt.length < 20 }}",
+              "condition": "true"
+            }
+          ]
+        }
+      },
+      "id": "validate-prompt-length",
+      "name": "Validate: Prompt Length",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ { success: false, error: 'Prompt too short', message: 'Please provide at least 20 characters' } }}"
+      },
+      "id": "respond-invalid-prompt",
+      "name": "Respond: Invalid Prompt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [600, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "gpt-4"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{ role: 'system', content: 'You are an expert n8n workflow generator. Convert natural language prompts into detailed n8n workflow specifications in JSON format. Include nodes, connections, and all necessary configuration.' }, { role: 'user', content: $node['initialize-request'].json.prompt }] }}"
+            },
+            {
+              "name": "temperature",
+              "value": 0.7
+            },
+            {
+              "name": "max_tokens",
+              "value": 2000
+            }
+          ]
+        }
+      },
+      "id": "generate-workflow-spec",
+      "name": "Generate Workflow Spec (GPT-4)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [600, 300],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "workflowSpec",
+              "value": "={{ JSON.parse($node['generate-workflow-spec'].json.choices[0].message.content) }}"
+            },
+            {
+              "name": "workflowName",
+              "value": "={{ $node['generate-workflow-spec'].json.choices[0].message.content.match(/\"name\":\\s*\"([^\"]+)\"/)?.[1] || 'Generated Workflow' }}"
+            }
+          ]
+        }
+      },
+      "id": "parse-spec",
+      "name": "Parse Workflow Spec",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.github.com/repos/{{ $env.GITHUB_OWNER }}/{{ $env.GITHUB_REPO }}/contents/workflows/telegram_{{ $node['initialize-request'].json.requestId }}.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.GITHUB_TOKEN }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "Telegram: {{ $node['parse-spec'].json.workflowName }} - Generated from prompt"
+            },
+            {
+              "name": "content",
+              "value": "={{ Buffer.from(JSON.stringify($node['parse-spec'].json.workflowSpec, null, 2)).toString('base64') }}"
+            },
+            {
+              "name": "branch",
+              "value": "main"
+            }
+          ]
+        }
+      },
+      "id": "commit-to-github",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1000, 300],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $node['initialize-request'].json.telegramUserId }}"
+            },
+            {
+              "name": "text",
+              "value": "{{ '✅ Workflow Generated!\\n\\n📋 Name: ' + $node['parse-spec'].json.workflowName + '\\n🔗 GitHub: https://github.com/' + $env.GITHUB_OWNER + '/' + $env.GITHUB_REPO + '/blob/main/workflows/telegram_' + $node['initialize-request'].json.requestId + '.json' }}"
+            },
+            {
+              "name": "parse_mode",
+              "value": "Markdown"
+            }
+          ]
+        }
+      },
+      "id": "send-success-notification",
+      "name": "Send Success Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ { success: true, message: 'Workflow generated and committed', workflowName: $node['parse-spec'].json.workflowName, requestId: $node['initialize-request'].json.requestId } }}"
+      },
+      "id": "respond-success",
+      "name": "Respond: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1400, 300]
+    }
+  ],
+  "connections": {
+    "webhook-receive": {
+      "main": [
+        [
+          {
+            "node": "initialize-request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "initialize-request": {
+      "main": [
+        [
+          {
+            "node": "validate-prompt-length",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate-prompt-length": {
+      "main": [
+        [
+          {
+            "node": "respond-invalid-prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "generate-workflow-spec",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "generate-workflow-spec": {
+      "main": [
+        [
+          {
+            "node": "parse-spec",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "parse-spec": {
+      "main": [
+        [
+          {
+            "node": "commit-to-github",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "commit-to-github": {
+      "main": [
+        [
+          {
+            "node": "send-success-notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "send-success-notification": {
+      "main": [
+        [
+          {
+            "node": "respond-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
