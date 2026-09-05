@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: telegram_bot/Dockerfile
+    container_name: telegram-workflow-bot
+    restart: always
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      YOUR_TELEGRAM_USER_ID: ${YOUR_TELEGRAM_USER_ID}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/workflow-generator}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_OWNER: ${GITHUB_OWNER:-sahilvyas1702-commits}
+      GITHUB_REPO: ${GITHUB_REPO:-n8n-workflows}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./telegram_bot/logs:/app/logs
+      - ./telegram_bot/.env:/app/.env:ro
+    networks:
+      - workflow-network
+    depends_on:
+      - n8n
+    healthcheck:
+      test: ["CMD", "python", "-c", "print('healthy')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-instance
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      DB_TYPE: sqlite
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://n8n:5678/}
+      GENERIC_TIMEZONE: UTC
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/home/node/workflows:ro
+    networks:
+      - workflow-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5678/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-workflows}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-workflow_password}
+      POSTGRES_DB: ${DB_NAME:-workflow_logs}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - workflow-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-workflows}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  n8n_data:
+  postgres_data:
+
+networks:
+  workflow-network:
+    driver: bridge
