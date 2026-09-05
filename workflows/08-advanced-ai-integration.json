@@ -1,0 +1,569 @@
+{
+  "name": "Phase 8: Advanced AI Integration",
+  "description": "Multi-AI model orchestration with GPT-4, Claude, and Gemini for intelligent automation",
+  "version": "1.0.0",
+  "tags": ["ai", "gpt-4", "claude", "gemini", "phase-8", "machine-learning"],
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-ai-trigger",
+      "name": "Webhook: AI Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [50, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "requestId",
+              "value": "={{ $randomUUID() }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ now.toISOString() }}"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $node['webhook-ai-trigger'].json.prompt }}"
+            },
+            {
+              "name": "task",
+              "value": "={{ $node['webhook-ai-trigger'].json.task || 'general' }}"
+            },
+            {
+              "name": "aiModels",
+              "value": "={{ $node['webhook-ai-trigger'].json.models || ['gpt4', 'claude'] }}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{ $node['webhook-ai-trigger'].json.temperature || 0.7 }}"
+            },
+            {
+              "name": "maxTokens",
+              "value": "={{ $node['webhook-ai-trigger'].json.max_tokens || 2000 }}"
+            }
+          ]
+        }
+      },
+      "id": "initialize-ai-request",
+      "name": "Initialize AI Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "gpt-4"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{ role: 'system', content: 'You are an expert AI assistant. Task: ' + $node['initialize-ai-request'].json.task }, { role: 'user', content: $node['initialize-ai-request'].json.prompt }] }}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{ $node['initialize-ai-request'].json.temperature }}"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ $node['initialize-ai-request'].json.maxTokens }}"
+            }
+          ]
+        }
+      },
+      "id": "call-gpt4",
+      "name": "Call GPT-4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 150],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "{{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "claude-3-opus-20240229"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ $node['initialize-ai-request'].json.maxTokens }}"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{ role: 'user', content: $node['initialize-ai-request'].json.prompt }] }}"
+            },
+            {
+              "name": "system",
+              "value": "{{ 'You are an expert AI assistant. Task: ' + $node['initialize-ai-request'].json.task }}"
+            }
+          ]
+        }
+      },
+      "id": "call-claude",
+      "name": "Call Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 300],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "{{ $env.GOOGLE_GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contents",
+              "value": "={{ [{ role: 'user', parts: [{ text: $node['initialize-ai-request'].json.prompt }] }] }}"
+            },
+            {
+              "name": "generationConfig",
+              "value": "={{ { temperature: $node['initialize-ai-request'].json.temperature, maxOutputTokens: $node['initialize-ai-request'].json.maxTokens } }}"
+            }
+          ]
+        }
+      },
+      "id": "call-gemini",
+      "name": "Call Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 450],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "gpt4Response",
+              "value": "={{ $node['call-gpt4'].json.choices?.[0]?.message?.content || 'Error calling GPT-4' }}"
+            },
+            {
+              "name": "gpt4Tokens",
+              "value": "={{ $node['call-gpt4'].json.usage?.total_tokens || 0 }}"
+            }
+          ]
+        }
+      },
+      "id": "process-gpt4",
+      "name": "Process GPT-4 Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [650, 150]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "claudeResponse",
+              "value": "={{ $node['call-claude'].json.content?.[0]?.text || 'Error calling Claude' }}"
+            },
+            {
+              "name": "claudeTokens",
+              "value": "={{ $node['call-claude'].json.usage?.output_tokens || 0 }}"
+            }
+          ]
+        }
+      },
+      "id": "process-claude",
+      "name": "Process Claude Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "geminiResponse",
+              "value": "={{ $node['call-gemini'].json.candidates?.[0]?.content?.parts?.[0]?.text || 'Error calling Gemini' }}"
+            }
+          ]
+        }
+      },
+      "id": "process-gemini",
+      "name": "Process Gemini Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [650, 450]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.OPENAI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "gpt-4"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{ role: 'system', content: 'You are an expert at synthesizing multiple AI responses into one comprehensive answer.' }, { role: 'user', content: 'Original Task: ' + $node['initialize-ai-request'].json.task + '\\n\\nGPT-4 Response:\\n' + $node['process-gpt4'].json.gpt4Response + '\\n\\nClaude Response:\\n' + $node['process-claude'].json.claudeResponse + '\\n\\nGemini Response:\\n' + $node['process-gemini'].json.geminiResponse + '\\n\\nPlease synthesize these responses into one optimal answer.' }] }}"
+            },
+            {
+              "name": "temperature",
+              "value": 0.5
+            },
+            {
+              "name": "max_tokens",
+              "value": 3000
+            }
+          ]
+        }
+      },
+      "id": "synthesize-responses",
+      "name": "Synthesize AI Responses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "synthesizedResponse",
+              "value": "={{ $node['synthesize-responses'].json.choices?.[0]?.message?.content || 'Synthesis failed' }}"
+            }
+          ]
+        }
+      },
+      "id": "process-synthesis",
+      "name": "Process Synthesis",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.slack.com/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.SLACK_BOT_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "{{ $env.SLACK_AI_CHANNEL }}"
+            },
+            {
+              "name": "text",
+              "value": "🤖 AI Analysis Complete"
+            },
+            {
+              "name": "blocks",
+              "value": "={{ [{ type: 'section', text: { type: 'mrkdwn', text: '*Task:* ' + $node['initialize-ai-request'].json.task + '\\n*Models Used:* GPT-4, Claude, Gemini\\n*Synthesis Status:* ✅ Complete' } }] }}"
+            }
+          ]
+        }
+      },
+      "id": "notify-slack",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 400],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "{{ $env.DATABASE_URL }}",
+        "authentication": "genericCredentialType",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO ai_responses (id, task, prompt, gpt4_response, claude_response, gemini_response, synthesized_response, gpt4_tokens, claude_tokens, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+            },
+            {
+              "name": "values",
+              "value": "={{ [$node['initialize-ai-request'].json.requestId, $node['initialize-ai-request'].json.task, $node['initialize-ai-request'].json.prompt, $node['process-gpt4'].json.gpt4Response, $node['process-claude'].json.claudeResponse, $node['process-gemini'].json.geminiResponse, $node['process-synthesis'].json.synthesizedResponse, $node['process-gpt4'].json.gpt4Tokens, $node['process-claude'].json.claudeTokens, $node['initialize-ai-request'].json.timestamp] }}"
+            }
+          ]
+        }
+      },
+      "id": "log-ai-analysis",
+      "name": "Log AI Analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1200, 500],
+      "onError": "continueRegularly"
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "assignments": {
+          "assignments": [
+            {
+              "name": "aiResult",
+              "value": "={{ { success: true, requestId: $node['initialize-ai-request'].json.requestId, task: $node['initialize-ai-request'].json.task, synthesizedResponse: $node['process-synthesis'].json.synthesizedResponse, models: { gpt4: { response: $node['process-gpt4'].json.gpt4Response, tokens: $node['process-gpt4'].json.gpt4Tokens }, claude: { response: $node['process-claude'].json.claudeResponse, tokens: $node['process-claude'].json.claudeTokens }, gemini: { response: $node['process-gemini'].json.geminiResponse } }, timestamp: $node['initialize-ai-request'].json.timestamp } }}"
+            }
+          ]
+        }
+      },
+      "id": "compile-ai-result",
+      "name": "Compile AI Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "successResponse",
+        "responseBody": "={{ $node['compile-ai-result'].json.aiResult }}"
+      },
+      "id": "respond-ai-success",
+      "name": "Respond: Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1500, 300]
+    }
+  ],
+  "connections": {
+    "webhook-ai-trigger": {
+      "main": [
+        [
+          {
+            "node": "initialize-ai-request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "initialize-ai-request": {
+      "main": [
+        [
+          {
+            "node": "call-gpt4",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "call-claude",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "call-gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-gpt4": {
+      "main": [
+        [
+          {
+            "node": "process-gpt4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-claude": {
+      "main": [
+        [
+          {
+            "node": "process-claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "call-gemini": {
+      "main": [
+        [
+          {
+            "node": "process-gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process-gpt4": {
+      "main": [
+        [
+          {
+            "node": "synthesize-responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process-claude": {
+      "main": [
+        [
+          {
+            "node": "synthesize-responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process-gemini": {
+      "main": [
+        [
+          {
+            "node": "synthesize-responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "synthesize-responses": {
+      "main": [
+        [
+          {
+            "node": "process-synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "process-synthesis": {
+      "main": [
+        [
+          {
+            "node": "notify-slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "log-ai-analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "notify-slack": {
+      "main": [
+        [
+          {
+            "node": "compile-ai-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "log-ai-analysis": {
+      "main": [
+        [
+          {
+            "node": "compile-ai-result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "compile-ai-result": {
+      "main": [
+        [
+          {
+            "node": "respond-ai-success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
